@@ -1,3 +1,4 @@
+from collections import deque
 import os
 os.environ['MUJOCO_GL'] = 'egl'
 import warnings
@@ -16,8 +17,18 @@ from tdmpc2 import TDMPC2
 
 torch.backends.cudnn.benchmark = True
 
+# frames = deque([], maxlen=1)
 
-@hydra.main(config_name='config', config_path='.')
+def _get_obs(env):
+	frame = env.env.render(
+		mode='rgb_array', width=64, height=64
+	)#.transpose(2, 0, 1)
+	# frames.append(frame)
+	# ret = torch.from_numpy(np.concatenate(frames))
+	return frame
+
+# @hydra.main(config_name='config', config_path='.')
+@hydra.main(config_name='cup', config_path='./config')
 def evaluate(cfg: dict):
 	"""
 	Script for evaluating a single-task / multi-task TD-MPC2 checkpoint.
@@ -76,13 +87,16 @@ def evaluate(cfg: dict):
 			obs, done, ep_reward, t = env.reset(task_idx=task_idx), False, 0, 0
 			if cfg.save_video:
 				frames = [env.render()]
+				# frames = [_get_obs(env)]
 			while not done:
 				action = agent.act(obs, t0=t==0, task=task_idx)
 				obs, reward, done, info = env.step(action)
+				# print(reward)
 				ep_reward += reward
 				t += 1
 				if cfg.save_video:
 					frames.append(env.render())
+					# frames.append(_get_obs(env))
 			ep_rewards.append(ep_reward)
 			ep_successes.append(info['success'])
 			if cfg.save_video:

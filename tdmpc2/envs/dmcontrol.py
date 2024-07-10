@@ -146,7 +146,8 @@ class TimeStepToGymWrapper:
 		self.env = env
 		self.domain = domain
 		self.task = task
-		self.max_episode_steps = 500
+		# self.max_episode_steps = 500
+		self.max_episode_steps = 40
 		self.t = 0
 	
 	@property
