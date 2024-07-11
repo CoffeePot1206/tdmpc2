@@ -45,7 +45,7 @@ def generate_traj(
 
 	state, done, reward, t = env.reset(task_idx=task_idx), False, 0, 0
 
-	while not done:
+	while not (success or done):
 		action = agent.act(state, t0=t==0, task=task_idx)
 
 		frame = env.render(
@@ -128,7 +128,7 @@ def evaluate(cfg: dict):
 	agent.load(cfg.checkpoint)
 
 	# create dataset
-	output_path = "/cache1/kuangfuhang/tdmpc2/datasets/cup-catch/rgbd-3.hdf5"
+	output_path = "/cache1/kuangfuhang/tdmpc2/datasets/cup-catch/rgb-{}.hdf5".format(cfg.eval_episodes)
 	os.makedirs(os.path.dirname(output_path), exist_ok=True)
 	f_out = h5py.File(output_path, "w")
 	data_grp = f_out.create_group("data")
@@ -146,6 +146,7 @@ def evaluate(cfg: dict):
 		video_dir = os.path.join(cfg.work_dir, 'videos')
 		os.makedirs(video_dir, exist_ok=True)
 	scores = []
+	print("Collecting {} trajectories...".format(cfg.eval_episodes))
 	tasks = cfg.tasks if cfg.multitask else [cfg.task]
 	for task_idx, task in enumerate(tasks):
 		if not cfg.multitask:
@@ -160,6 +161,7 @@ def evaluate(cfg: dict):
 						cfg,
 					)
 			if not success:
+				print("Fail: ep {}. Retrying...".format(ep))
 				continue
 			added_demos.append(f"demo_{ep}")
 			# ep_rewards.append(ep_reward)
@@ -180,7 +182,7 @@ def evaluate(cfg: dict):
 			ep_data_grp.attrs["num_samples"] = traj["actions"].shape[0]
 			total_samples += traj["actions"].shape[0]
 
-			print(f"ep: {ep} done")
+			print(f"ep {ep}: done. Trajectory length: {traj['actions'].shape[0]}")
 			ep += 1
 		
 
@@ -198,6 +200,7 @@ def evaluate(cfg: dict):
 
 	f_out.close()
 
+	print("Successfully collect {} trajectories with total {} samples.".format(cfg.eval_episodes, total_samples))
 
 
 if __name__ == '__main__':

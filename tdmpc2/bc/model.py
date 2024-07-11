@@ -115,7 +115,7 @@ class ActorNetwork(nn.Module):
         x = self.nets["encoder"](obs_dict)
         x = self.nets["mlp"](x)
         x = self.nets["decoder"](x)
-        return x
+        return torch.tanh(x)
 
 
 class ActorModel():
@@ -128,6 +128,7 @@ class ActorModel():
         optimizer="Adam",
         scheduler="cosine",
         device="cuda",
+        pretrained_path=None,
     ) -> None:
         self.device = device
         self.net = ActorNetwork(
@@ -136,6 +137,8 @@ class ActorModel():
             mlp_layer_dims=mlp_layer_dims,
         )
         self.net = self.net.float().to(device)
+        if pretrained_path is not None:
+            self.net.load_state_dict(torch.load(pretrained_path))
 
         # set optimizer
         if optimizer == "Adam":
@@ -207,5 +210,23 @@ class ActorModel():
 
     def get_action(self, obs_dict):
         self.net.eval()
+        for k in obs_dict:
+            obs_dict[k] = obs_dict[k].unsqueeze(0).float().to(self.device)
+            if "rgb" in k:
+                assert obs_dict[k].ndim == 4
+                obs_dict[k] = obs_dict[k].permute(0, 3, 1, 2)
         action = self.net(obs_dict)
-        return action
+        return action.cpu().detach()
+    
+if __name__ == "__main__":
+    pretrained_path = "/home/kuangfuhang/tdmpc2/tdmpc2/tdmpc2/logs/cup-catch/1/default/cup-catch/20240710161405/models/epoch_2_success_0.0.pth"
+    obs_shapes = {
+        'rgb':{ 
+            'input': [3, 84, 84],
+            'crop': [3, 76, 76],
+        },
+        'position': [4],
+        'velocity': [4],
+    }
+    model = ActorModel(None, obs_shapes, pretrained_path=pretrained_path)
+    print("success!")

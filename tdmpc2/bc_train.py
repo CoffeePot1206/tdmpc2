@@ -1,5 +1,3 @@
-
-import argparse
 import datetime
 import json
 import shutil
@@ -9,7 +7,6 @@ import os
 from omegaconf import OmegaConf
 import psutil
 import sys
-# sys.path.append("/home/kuangfuhang/tdmpc2/tdmpc2/tdmpc2")
 import traceback
 import h5py
 
@@ -20,17 +17,17 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader
 
-import robomimic
-import robomimic.utils.train_utils as TrainUtils
 from robomimic.utils.log_utils import PrintLogger
 import wandb
 
+os.environ['MUJOCO_GL'] = 'egl'
 from bc.model import ActorModel
 from bc.dataset import BCDataset
+from bc.rollout import rollout
 from common.parser import parse_cfg
 from common.seed import set_seed
 from envs import make_env
-from tdmpc2 import TDMPC2
+
 
 def get_work_dir(cfg):
     t_now = time.time()
@@ -44,15 +41,15 @@ def get_work_dir(cfg):
             print("REMOVING")
             shutil.rmtree(base_output_dir)
 
-    model_dir = os.path.join(base_output_dir, time_str, "models")
+    model_dir = os.path.join(base_output_dir, time_str, cfg.obs_type, "models")
     os.makedirs(model_dir)
 
     # tensorboard directory
-    log_dir = os.path.join(base_output_dir, time_str, "logs")
+    log_dir = os.path.join(base_output_dir, time_str, cfg.obs_type, "logs")
     os.makedirs(log_dir)
 
     # video directory
-    video_dir = os.path.join(base_output_dir, time_str, "videos")
+    video_dir = os.path.join(base_output_dir, time_str, cfg.obs_type, "videos")
     os.makedirs(video_dir)
 
     return model_dir, log_dir, video_dir
@@ -150,7 +147,6 @@ def train(cfg):
     # env = get_env()
     # print(env)
     # exit()
-    envs = {"cup-catch": env}
 
     print("")
 
@@ -159,7 +155,7 @@ def train(cfg):
     data_logger.init(
         project="tdmpc2",
         entity=cfg.wandb_entity,
-        name=cfg.wandb_name,
+        name=cfg.wandb_name+"-"+cfg.obs_type,
         config=OmegaConf.to_container(cfg=cfg),
         mode="online" if cfg.wandb_enabled else "disabled"
     )
@@ -260,94 +256,44 @@ def train(cfg):
             print("Validation Epoch {}".format(epoch))
             print(json.dumps(step_log, sort_keys=True, indent=4))
 
-            # save checkpoint if achieve new best validation loss
-            valid_check = "Loss" in step_log
-            if valid_check and (best_valid_loss is None or (step_log["Loss"] <= best_valid_loss)):
-                best_valid_loss = step_log["Loss"]
-                if cfg.experiment.save.enabled and cfg.experiment.save.on_best_validation:
-                    epoch_ckpt_name += "_best_validation_{}".format(best_valid_loss)
-                    should_save_ckpt = True
-                    ckpt_reason = "valid" if ckpt_reason is None else ckpt_reason
-
-        continue 
         # Evaluate the model by by running rollouts
 
         # do rollouts at fixed rate or if it's time to save a new ckpt
-        video_paths = None
+        video_path = None
         rollout_check = (epoch % cfg.eval_freq == 0)
         if (epoch > rollout_start) and rollout_check:
 
-            # wrap model as a RolloutPolicy to prepare for rollouts
-            rollout_model = RolloutPolicy(model, obs_normalization_stats=obs_normalization_stats)
-
-            num_episodes = cfg.experiment.rollout.n
-            all_rollout_logs, video_paths = TrainUtils.rollout_with_stats(
-                policy=rollout_model,
-                envs=envs,
-                horizon=cfg.experiment.rollout.horizon,
-                use_goals=cfg.use_goals,
-                num_episodes=num_episodes,
-                render=False,
-                video_dir=video_dir if cfg.save_video else None,
+            num_episodes = cfg.eval_episodes
+            all_rollout_logs, video_path = rollout(
+                model=model,
+                env=env,
+                horizon=cfg.eval_horizon,
+                num_episodes=cfg.eval_episodes,
+                video_dir=video_dir,
                 epoch=epoch,
-                video_skip=cfg.experiment.get("video_skip", 5),
-                terminate_on_success=cfg.experiment.rollout.terminate_on_success,
             )
 
             # summarize results from rollouts to tensorboard and terminal
-            for env_name in all_rollout_logs:
-                rollout_logs = all_rollout_logs[env_name]
-                for k, v in rollout_logs.items():
-                    data_logger.log({"Rollout/{}/{}".format(k, env_name): v}, epoch, log_stats=True)
+            for k, v in all_rollout_logs.items():
+                data_logger.log({"Rollout/{}".format(k): v}, epoch)
 
-                print("\nEpoch {} Rollouts took {}s (avg) with results:".format(epoch, rollout_logs["time"]))
-                print('Env: {}'.format(env_name))
-                print(json.dumps(rollout_logs, sort_keys=True, indent=4))
-
-            # checkpoint and video saving logic
-            updated_stats = TrainUtils.should_save_from_rollout_logs(
-                all_rollout_logs=all_rollout_logs,
-                best_return=best_return,
-                best_success_rate=best_success_rate,
-                epoch_ckpt_name=epoch_ckpt_name,
-                save_on_best_rollout_return=cfg.experiment.save.on_best_rollout_return,
-                save_on_best_rollout_success_rate=cfg.experiment.save.on_best_rollout_success_rate,
-            )
-            best_return = updated_stats["best_return"]
-            best_success_rate = updated_stats["best_success_rate"]
-            epoch_ckpt_name = updated_stats["epoch_ckpt_name"]
-            should_save_ckpt = (cfg.experiment.save.enabled and updated_stats["should_save_ckpt"]) or should_save_ckpt
-            if updated_stats["ckpt_reason"] is not None:
-                ckpt_reason = updated_stats["ckpt_reason"]
-
-        # Only keep saved videos if the ckpt should be saved (but not because of validation score)
-        should_save_video = (should_save_ckpt and (ckpt_reason != "valid")) or cfg.experiment.keep_all_videos
-        if video_paths is not None and not should_save_video:
-            for env_name in video_paths:
-                os.remove(video_paths[env_name])
+            print(json.dumps(all_rollout_logs, sort_keys=True, indent=4))
 
         # Save model checkpoints based on conditions (success rate, validation loss, etc)
         if should_save_ckpt:  # EDITED
-            TrainUtils.save_model(
-                model=model,
-                config=cfg,
-                env_meta=env_meta,
-                shape_meta=shape_meta,
-                ckpt_path=os.path.join(ckpt_dir, epoch_ckpt_name + ".pth"),
-                obs_normalization_stats=obs_normalization_stats,
-            )
+            torch.save(model.net.state_dict(), f=os.path.join(ckpt_dir, "epoch_{}_success_{}.pth".format(epoch, all_rollout_logs["Success_Rate"])))
 
         # Finally, log memory usage in MB
         process = psutil.Process(os.getpid())
         mem_usage = int(process.memory_info().rss / 1000000)
-        data_logger.log("System/RAM Usage (MB)", mem_usage, epoch)
+        data_logger.log({"System/RAM Usage (MB)": mem_usage}, epoch)
         print("\nEpoch {} Memory Usage: {} MB\n".format(epoch, mem_usage))
 
     # # terminate logging
     # data_logger.close()
 
 
-@hydra.main(config_name='cup_train', config_path='./config')
+@hydra.main(config_name='cup_debug', config_path='./config')
 def main(cfg: dict):
     
     # maybe modify config for debugging purposes
@@ -361,12 +307,13 @@ def main(cfg: dict):
         # if rollouts are enabled, try 2 rollouts at end of each epoch, with 10 environment steps
         cfg.eval_episodes = 2
         cfg.eval_freq = 2
-        cfg.eval_horizon = 10
+        cfg.eval_horizon = 50
+        cfg.start_from = 0
 
         # send output to a temporary directory
         cfg.work_dir = "/tmp/tmp_trained_models"
 
-        cfg.wandb_enabled = False
+        # cfg.wandb_enabled = False
 
     # catch error during training and print it
     res_str = "finished run successfully!"
