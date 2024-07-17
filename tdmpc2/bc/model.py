@@ -11,7 +11,6 @@ from robomimic.models.obs_core import VisualCore, CropRandomizer
 class ObservationEncoder(nn.Module):
     def __init__(self, obs_shapes, activation=nn.ReLU) -> None:
         super().__init__()
-        # self.obs_keys = cfg.obs_keys
         self.obs_shapes = obs_shapes
         self.obs_randomizers = nn.ModuleDict()
         self.obs_nets = nn.ModuleDict()

@@ -3,7 +3,7 @@ tdmpc2/logs/
 tdmpc2/outputs/
 tdmpc2/wandb/
 tdmpc2/config/
-*.sh
+tdmpc2/*.sh
 
 # HPC
 nautilus/*.yaml

@@ -150,6 +150,8 @@ def train(cfg):
 
     print("")
 
+    cfg.work_dir = os.path.join(log_dir, "../")
+
     # setup for a new training run
     data_logger = wandb
     data_logger.init(
@@ -165,7 +167,7 @@ def train(cfg):
         cfg=cfg,
         # obs_shapes=shape_meta["all_shapes"],
         obs_shapes=cfg.obs_shapes,
-        ac_dim=shape_meta["ac_dim"],
+        ac_dim=cfg.ac_dim,
         mlp_layer_dims=[512, 512]
     )
     
@@ -177,8 +179,9 @@ def train(cfg):
     print(model)  # print model summary
     print("")
 
-    # load training data    # TODO!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    trainset, validset = BCDataset(cfg.dataset, split='train'), BCDataset(cfg.dataset, split='valid')
+    # load training data
+    trainset = BCDataset(cfg.dataset, split='train')
+    validset = BCDataset("/cache1/kuangfuhang/tdmpc2/datasets/cup-catch/rgb-100-valid.hdf5", split='valid')
     print("\n============= Training Dataset =============")
     print(trainset)
     print("")
@@ -202,7 +205,7 @@ def train(cfg):
         num_workers = min(cfg.workers, 1)
         valid_loader = DataLoader(
             dataset=validset,
-            batch_size=cfg.batch_size,
+            batch_size=cfg.valid_batch_size,
             shuffle=True,
             num_workers=num_workers,
             drop_last=True,
@@ -219,6 +222,12 @@ def train(cfg):
     # number of learning steps per epoch (defaults to a full dataset pass)
     train_num_steps = cfg.steps_per_epoch
     valid_num_steps = cfg.valid_steps_per_epoch
+
+    all_rollout_stats = {
+        "Success_Rate": [],
+        "Reward": [],
+        "Horizon": [],
+    }
 
     for epoch in range(1, cfg.num_epochs + 1): # epoch numbers start at 1
         step_log = run_epoch(
@@ -276,6 +285,10 @@ def train(cfg):
             # summarize results from rollouts to tensorboard and terminal
             for k, v in all_rollout_logs.items():
                 data_logger.log({"Rollout/{}".format(k): v}, epoch)
+                if k in all_rollout_stats:
+                    all_rollout_stats[k].append(v)
+                    data_logger.log({"Rollout/{}-mean".format(k): np.mean(all_rollout_stats[k])}, epoch)
+                    data_logger.log({"Rollout/{}-std".format(k): np.std(all_rollout_stats[k])}, epoch)
 
             print(json.dumps(all_rollout_logs, sort_keys=True, indent=4))
 

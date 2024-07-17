@@ -31,8 +31,10 @@ def generate_traj(
 ):
 	obs = {
 		"rgb": [],
-		"position": [],
-		"velocity": [],
+		"robot_pos": [],
+		"robot_vel": [],
+		"object_pos": [],
+		"object_vel": [],
 	}
 	actions = []
 	rewards = []
@@ -54,8 +56,10 @@ def generate_traj(
 		frames.append(frame)
 
 		obs['rgb'].append(np.concatenate(frames))
-		obs['position'].append(np.array(state[:4]))
-		obs['velocity'].append(np.array(state[4:]))
+		obs['robot_pos'].append(np.array(state[:2]))
+		obs['object_pos'].append(np.array(state[2:4]))
+		obs['robot_vel'].append(np.array(state[4:6]))
+		obs['object_vel'].append(np.array(state[6:8]))
 		actions.append(np.array(action))
 		rewards.append(np.array(reward))
 		dones.append(np.array(done))
@@ -128,7 +132,7 @@ def evaluate(cfg: dict):
 	agent.load(cfg.checkpoint)
 
 	# create dataset
-	output_path = "/cache1/kuangfuhang/tdmpc2/datasets/cup-catch/rgb-{}.hdf5".format(cfg.eval_episodes)
+	output_path = "/cache1/kuangfuhang/tdmpc2/datasets/cup-catch/rgb-{}-valid.hdf5".format(cfg.eval_episodes)
 	os.makedirs(os.path.dirname(output_path), exist_ok=True)
 	f_out = h5py.File(output_path, "w")
 	data_grp = f_out.create_group("data")
@@ -188,15 +192,22 @@ def evaluate(cfg: dict):
 
     # global metadata
 	data_grp.attrs["total"] = total_samples
+	data_grp.attrs["seed"] = cfg.seed
 	
     # generate filter keys
-	np.random.seed(1)
-	np.random.shuffle(added_demos)
-	cut_off = len(added_demos) // 10 + 1
-	valid_demos = added_demos[:cut_off]
-	train_demos = added_demos[cut_off:]
-	mask_grp.create_dataset("train", data=train_demos)
-	mask_grp.create_dataset("valid", data=valid_demos)
+	if not cfg.validate:
+		np.random.seed(1)
+		np.random.shuffle(added_demos)
+		cut_off = len(added_demos) // 10 + 1
+		valid_demos = added_demos[:cut_off]
+		train_demos = added_demos[cut_off:]
+		mask_grp.create_dataset("train", data=train_demos)
+		mask_grp.create_dataset("valid", data=valid_demos)
+	else:
+		train_demos = []
+		valid_demos = added_demos[:]
+		mask_grp.create_dataset("train", data=train_demos)
+		mask_grp.create_dataset("valid", data=valid_demos)
 
 	f_out.close()
 

@@ -19,6 +19,7 @@ def rollout(
     video_name = "epoch_{}.mp4".format(epoch)
     video_path = os.path.join(video_dir, video_name)
     video_writer = imageio.get_writer(video_path, fps=20)
+    env = RolloutEnvWrapper(env=env)
 
     rollout_logs = []
 
@@ -41,6 +42,7 @@ def rollout(
         print(json.dumps(rollout_info, sort_keys=True, indent=4))
 
     video_writer.close()
+    print("video is written to: {}".format(video_path))
 
     # average metric across all episodes
     rollout_logs = dict((k, [rollout_logs[i][k] for i in range(len(rollout_logs))]) for k in rollout_logs[0])
@@ -62,14 +64,7 @@ def rollout_once(
     obs = dict()
     results = dict()
 
-    state = env.reset(task_idx=0)
-    rgb = env.render(
-        mode='rgb_array', width=84, height=84
-    )
-
-    obs['rgb'] = torch.from_numpy(rgb.copy())
-    obs['position'] = state[:4]
-    obs['velocity'] = state[4:]
+    obs = env.reset()
 
     success = False
     video_count = 0
@@ -78,14 +73,7 @@ def rollout_once(
     for i in range(horizon):
         action = model.get_action(obs)
 
-        state, reward, done, t = env.step(action)
-
-        rgb = env.render(
-            mode='rgb_array', width=84, height=84
-        )
-        obs['rgb'] = torch.from_numpy(rgb.copy())
-        obs['position'] = state[:4]
-        obs['velocity'] = state[4:]
+        obs, reward, done, t = env.step(action)
 
         total_reward += reward
         success = (reward >= 2)
@@ -93,6 +81,7 @@ def rollout_once(
         if video_count % video_skip == 0:
             video_img = env.render(mode="rgb_array", height=256, width=256)
             video_img = cv2.putText(video_img.copy(), text="{}".format(ep+1), org=(5, 20), fontFace=cv2.FONT_HERSHEY_COMPLEX, fontScale=0.5, color=(255, 255, 255))
+            video_img = cv2.putText(video_img, text="rw: {}".format(reward), org=(5, 40), fontFace=cv2.FONT_HERSHEY_COMPLEX, fontScale=0.5, color=(255, 255, 255))
             video_writer.append_data(video_img)
         video_count += 1
 
@@ -104,3 +93,37 @@ def rollout_once(
     results["Success_Rate"] = float(success)
 
     return results
+
+
+class RolloutEnvWrapper():
+    def __init__(self, env):
+        self.env = env
+
+    def reset(self, task_idx=0):
+        state = self.env.reset(task_idx=task_idx)
+        rgb = self.env.render(
+            mode='rgb_array', width=84, height=84
+        )
+        return {
+            'rgb': torch.from_numpy(rgb.copy()),
+            'robot_pos': state[:2],
+            'object_pos': state[2:4],
+            'robot_vel': state[4:6],
+            'object_vel': state[6:8],
+        }
+    
+    def render(self, mode='rgb_array', width=84, height=84):
+        return self.env.render(mode=mode, width=width, height=height)
+    
+    def step(self, action):
+        state, reward, done, t = self.env.step(action)
+        rgb = self.env.render(
+            mode='rgb_array', width=84, height=84
+        )
+        return {
+            'rgb': torch.from_numpy(rgb.copy()),
+            'robot_pos': state[:2],
+            'object_pos': state[2:4],
+            'robot_vel': state[4:6],
+            'object_vel': state[6:8],
+        }, reward, done, t

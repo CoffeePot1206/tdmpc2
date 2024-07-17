@@ -97,3 +97,49 @@ class CustomBallInCup(ball_in_cup.BallInCup):
                                    sigmoid='linear')
     spin_reward = not_in_target * (dist_reward + 2*vel_reward) / 3
     return spin_reward
+
+
+@ball_in_cup.SUITE.add('harder')
+def harder(time_limit=_DEFAULT_TIME_LIMIT, random=None, environment_kwargs=None):
+  """Returns the Ball-in-Cup task."""
+  physics = Physics.from_xml_string(*get_model_and_assets())
+  task = HarderBallInCup(random=random)
+  environment_kwargs = environment_kwargs or {}
+  return control.Environment(
+      physics, task, time_limit=time_limit, control_timestep=_CONTROL_TIMESTEP,
+      **environment_kwargs)
+
+
+class HarderBallInCup(ball_in_cup.BallInCup):
+  """The Ball-in-Cup task. Put the ball in the cup."""
+
+  def initialize_episode(self, physics):
+    """Sets the state of the environment at the start of each episode.
+
+    Args:
+      physics: An instance of `Physics`.
+
+    """
+    # Find a collision-free random initial position of the ball.
+    penetrating = True
+    while penetrating:
+      # Assign a random ball position.
+      physics.named.data.qpos['ball_x'] = self.random.uniform(-.2, .2)
+      # physics.named.data.qpos['cup_z'] is always 0. The cup_z is actually below the bottom of the cup.
+      # physics.named.data.qpos['ball_z'] = self.random.uniform(.2, .5)
+      physics.named.data.qpos['ball_z'] = self.random.uniform(.2, .3)
+      # Check for collisions.
+      physics.after_reset()
+      penetrating = physics.data.ncon > 0
+    base.Task.initialize_episode(self, physics)
+
+  def get_observation(self, physics):
+    """Returns an observation of the state."""
+    obs = collections.OrderedDict()
+    obs['position'] = physics.position()
+    obs['velocity'] = physics.velocity()
+    return obs
+
+  def get_reward(self, physics):
+    """Returns a sparse reward."""
+    return physics.in_target()
