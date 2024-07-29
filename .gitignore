@@ -4,6 +4,8 @@ tdmpc2/outputs/
 tdmpc2/wandb/
 tdmpc2/config/
 tdmpc2/*.sh
+nohup.out
+.nfs*
 
 # HPC
 nautilus/*.yaml

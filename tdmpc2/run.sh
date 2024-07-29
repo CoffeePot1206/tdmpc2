@@ -1,8 +1,9 @@
 NUM_DEMOS=100
 SEED=1
-NUM_EPOCH=600
+NUM_EPOCH=300
 START_FROM=0
 LR=2e-4
+TASK="cup-harder"
 
 seed_list=(2 3)
 # num_demo_list=(100 200 500)
@@ -14,7 +15,8 @@ run(){
 CUDA_VISIBLE_DEVICES=$1 nohup python /home/kuangfuhang/tdmpc2/tdmpc2/tdmpc2/bc_train.py \
 --config-path /home/kuangfuhang/tdmpc2/tdmpc2/tdmpc2/config \
 --config-name cup_$2 \
-dataset="/cache1/kuangfuhang/tdmpc2/datasets/cup-catch/rgb-${3}.hdf5" \
+task=$TASK \
+dataset="/cache1/kuangfuhang/tdmpc2/datasets/$TASK/rgb-${3}.hdf5" \
 seed=$4 \
 num_epochs=$NUM_EPOCH \
 start_from=$START_FROM \

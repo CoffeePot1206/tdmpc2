@@ -132,7 +132,8 @@ def evaluate(cfg: dict):
 	agent.load(cfg.checkpoint)
 
 	# create dataset
-	output_path = "/cache1/kuangfuhang/tdmpc2/datasets/cup-catch/rgb-{}-valid.hdf5".format(cfg.eval_episodes)
+	valid_str = "-valid" if cfg.validate else ""
+	output_path = "/cache1/kuangfuhang/tdmpc2/datasets/{}/rgb-{}{}.hdf5".format(cfg.task, cfg.eval_episodes, valid_str)
 	os.makedirs(os.path.dirname(output_path), exist_ok=True)
 	f_out = h5py.File(output_path, "w")
 	data_grp = f_out.create_group("data")

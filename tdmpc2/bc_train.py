@@ -34,49 +34,74 @@ def get_work_dir(cfg):
     time_str = datetime.datetime.fromtimestamp(t_now).strftime('%Y%m%d%H%M%S')
     
     base_output_dir = os.path.expanduser(cfg.work_dir)
-    base_output_dir = os.path.join(base_output_dir, cfg.task)
+    base_output_dir = os.path.join(base_output_dir, cfg.task, "seed_{}".format(cfg.seed), time_str)
+    # base_output_dir = os.path.join(base_output_dir, str(cfg.device))
     if os.path.exists(base_output_dir):
         ans = input("WARNING: model directory ({}) already exists! \noverwrite? (y/n)\n".format(base_output_dir))
         if ans == "y":
             print("REMOVING")
             shutil.rmtree(base_output_dir)
 
-    model_dir = os.path.join(base_output_dir, time_str, cfg.obs_type, "models")
+    model_dir = os.path.join(base_output_dir, cfg.obs_type, "models")
     os.makedirs(model_dir)
 
     # tensorboard directory
-    log_dir = os.path.join(base_output_dir, time_str, cfg.obs_type, "logs")
+    log_dir = os.path.join(base_output_dir, cfg.obs_type, "logs")
     os.makedirs(log_dir)
 
     # video directory
-    video_dir = os.path.join(base_output_dir, time_str, cfg.obs_type, "videos")
+    video_dir = os.path.join(base_output_dir, cfg.obs_type, "videos")
     os.makedirs(video_dir)
 
     return model_dir, log_dir, video_dir
 
-def run_epoch(model, data_loader, epoch, validate=False, num_steps=None):
+def run_epoch(
+    model, 
+    train_loader, 
+    valid_loader,
+    epoch, 
+    data_logger,
+    num_steps=None
+):
     
     if num_steps is None:
-        num_steps = len(data_loader)
+        num_steps = len(train_loader)
+    step_start = (epoch - 1) * num_steps
 
     step_log_all = []
 
-    data_loader_iter = iter(data_loader)
-    for _ in tqdm(range(num_steps)):
+    train_iter = iter(train_loader)
+    valid_iter = iter(valid_loader)
+
+    for t in tqdm(range(num_steps)):
+        step = step_start + t
 
         # load next batch from data loader
         try:
-            batch = next(data_loader_iter)
+            batch = next(train_iter)
+            valid_batch = next(valid_iter)
         except StopIteration:
             # reset for next dataset pass
-            data_loader_iter = iter(data_loader)
-            batch = next(data_loader_iter)
+            train_iter = iter(train_loader)
+            valid_iter = iter(valid_loader)
+            batch = next(train_iter)
+            valid_batch = next(valid_iter)
 
         # forward and backward pass
-        info = model.run_step(batch, validate=validate)
+        train_info = model.run_step(batch, validate=False)
+        with torch.no_grad():
+            valid_info = model.run_step(valid_batch, validate=True)
+
+        # logging
+        for k, v in train_info.items():
+            data_logger.log({"Train/{}".format(k): v}, step)
+        for k, v in valid_info.items():
+            data_logger.log({"Valid/{}".format(k): v}, step)
+        for i, group in enumerate(model.optimizer.param_groups):
+            data_logger.log({"Train/{}_lr".format(i): group["lr"]}, step)
 
         # tensorboard logging
-        step_log_all.append(info)
+        step_log_all.append(train_info)
 
     # flatten and take the mean of the metrics
     step_log_dict = {}
@@ -87,7 +112,7 @@ def run_epoch(model, data_loader, epoch, validate=False, num_steps=None):
             step_log_dict[k].append(step_log_all[i][k])
     step_log_all = dict((k, float(np.mean(v))) for k, v in step_log_dict.items())
 
-    return step_log_all
+    return step_log_all, step
 
 def train(cfg):
     """
@@ -150,12 +175,19 @@ def train(cfg):
 
     print("")
 
+    # update all config info
     cfg.work_dir = os.path.join(log_dir, "../")
+    if cfg.start_from is None:
+        cfg.start_from = cfg.num_epochs - 5 * cfg.eval_freq
+
+    # save the config as a json file
+    with open(os.path.join(log_dir, '..', 'config.yaml'), 'w') as outfile:
+        OmegaConf.save(config=cfg, f=outfile)
 
     # setup for a new training run
     data_logger = wandb
     data_logger.init(
-        project="tdmpc2",
+        project=cfg.wandb_project,
         entity=cfg.wandb_entity,
         name=cfg.wandb_name+"-"+cfg.obs_type,
         config=OmegaConf.to_container(cfg=cfg),
@@ -170,10 +202,6 @@ def train(cfg):
         ac_dim=cfg.ac_dim,
         mlp_layer_dims=[512, 512]
     )
-    
-    # save the config as a json file
-    with open(os.path.join(log_dir, '..', 'config.yaml'), 'w') as outfile:
-        OmegaConf.save(config=cfg, f=outfile)
 
     print("\n============= Model Summary =============")
     print(model)  # print model summary
@@ -230,10 +258,12 @@ def train(cfg):
     }
 
     for epoch in range(1, cfg.num_epochs + 1): # epoch numbers start at 1
-        step_log = run_epoch(
+        step_log, step = run_epoch(
             model=model,
-            data_loader=train_loader,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
             epoch=epoch,
+            data_logger=data_logger,
             num_steps=train_num_steps,
         )
         model.on_epoch_end(epoch)
@@ -252,18 +282,18 @@ def train(cfg):
 
         print("Train Epoch {}".format(epoch))
         print(json.dumps(step_log, sort_keys=True, indent=4))
-        for k, v in step_log.items():
-            data_logger.log({"Train/{}".format(k): v}, epoch)
+        # for k, v in step_log.items():
+        #     data_logger.log({"Train/{}".format(k): v}, epoch)
 
-        # Evaluate the model on validation set
-        if cfg.validate:
-            with torch.no_grad():
-                step_log = run_epoch(model=model, data_loader=valid_loader, epoch=epoch, validate=True, num_steps=valid_num_steps)
-            for k, v in step_log.items():
-                data_logger.log({"Valid/{}".format(k): v}, epoch)
+        # # Evaluate the model on validation set
+        # if cfg.validate:
+        #     with torch.no_grad():
+        #         step_log = run_epoch(model=model, train_loader=valid_loader, epoch=epoch, validate=True, num_steps=valid_num_steps)
+        #     for k, v in step_log.items():
+        #         data_logger.log({"Valid/{}".format(k): v}, epoch)
 
-            print("Validation Epoch {}".format(epoch))
-            print(json.dumps(step_log, sort_keys=True, indent=4))
+        #     print("Validation Epoch {}".format(epoch))
+        #     print(json.dumps(step_log, sort_keys=True, indent=4))
 
         # Evaluate the model by by running rollouts
 
@@ -284,11 +314,11 @@ def train(cfg):
 
             # summarize results from rollouts to tensorboard and terminal
             for k, v in all_rollout_logs.items():
-                data_logger.log({"Rollout/{}".format(k): v}, epoch)
+                data_logger.log({"Rollout/{}".format(k): v}, step)
                 if k in all_rollout_stats:
                     all_rollout_stats[k].append(v)
-                    data_logger.log({"Rollout/{}-mean".format(k): np.mean(all_rollout_stats[k])}, epoch)
-                    data_logger.log({"Rollout/{}-std".format(k): np.std(all_rollout_stats[k])}, epoch)
+                    data_logger.log({"Rollout/{}-mean".format(k): np.mean(all_rollout_stats[k])}, step)
+                    data_logger.log({"Rollout/{}-std".format(k): np.std(all_rollout_stats[k])}, step)
 
             print(json.dumps(all_rollout_logs, sort_keys=True, indent=4))
 
@@ -299,7 +329,7 @@ def train(cfg):
         # Finally, log memory usage in MB
         process = psutil.Process(os.getpid())
         mem_usage = int(process.memory_info().rss / 1000000)
-        data_logger.log({"System/RAM Usage (MB)": mem_usage}, epoch)
+        data_logger.log({"System/RAM Usage (MB)": mem_usage}, step)
         print("\nEpoch {} Memory Usage: {} MB\n".format(epoch, mem_usage))
 
     # # terminate logging
